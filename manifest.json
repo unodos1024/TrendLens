@@ -1,0 +1,16 @@
+{
+    "name": "TrendLens AI Search",
+    "short_name": "TrendLens",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0f172a",
+    "theme_color": "#818cf8",
+    "icons": [
+        {
+            "src": "https://cdn-icons-png.flaticon.com/512/2592/2592200.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ]
+}

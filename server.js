@@ -6,20 +6,25 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const EXCLUDED_FILE = path.join(__dirname, 'excluded_news.json');
 const COLLECTED_FILE = path.join(__dirname, 'collected_news.json');
 const API_CONFIGS_FILE = path.join(__dirname, 'api_configs.json');
 
 // Initialize config file with a sample if not exists
-if (!fs.existsSync(API_CONFIGS_FILE)) {
-    fs.writeFileSync(API_CONFIGS_FILE, JSON.stringify([
-        {
-            id: 'naver',
-            name: '네이버 뉴스 (기본)',
-            type: 'naver'
-        }
-    ], null, 2));
+try {
+    if (!fs.existsSync(API_CONFIGS_FILE)) {
+        console.log('Initializing api_configs.json...');
+        fs.writeFileSync(API_CONFIGS_FILE, JSON.stringify([
+            {
+                id: 'naver',
+                name: '네이버 뉴스 (기본)',
+                type: 'naver'
+            }
+        ], null, 2));
+    }
+} catch (e) {
+    console.error('Failed to initialize config file:', e.message);
 }
 
 app.use(cors());
@@ -31,7 +36,8 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.static(path.join(__dirname)));
+// Health check
+app.get('/health', (req, res) => res.send('OK'));
 
 // Debug GET route for generate-draft
 app.get('/api/generate-draft', (req, res) => {
@@ -78,9 +84,10 @@ app.delete('/api/configs/:id', (req, res) => {
 
 // Unified Search Endpoint
 app.get('/api/search', async (req, res) => {
-    const { sourceId, query, sort } = req.query;
+    const { sourceId, query, sort, display } = req.query;
     const configs = readJson(API_CONFIGS_FILE);
     const config = configs.find(c => c.id === sourceId) || configs.find(c => c.type === 'naver');
+    const displayCount = parseInt(display) || 20;
 
     try {
         if (config.type === 'naver') {
@@ -88,19 +95,19 @@ app.get('/api/search', async (req, res) => {
             const clientId = process.env.NAVER_CLIENT_ID;
             const clientSecret = process.env.NAVER_CLIENT_SECRET;
             const response = await axios.get('https://openapi.naver.com/v1/search/news.json', {
-                params: { query, display: 50, start: 1, sort: sort || 'sim' },
+                params: { query, display: displayCount, start: 1, sort: sort || 'sim' },
                 headers: { 'X-Naver-Client-Id': clientId, 'X-Naver-Client-Secret': clientSecret }
             });
             const excludedLinks = readJson(EXCLUDED_FILE);
             const filteredItems = response.data.items.filter(item => !excludedLinks.includes(item.link));
-            return res.json({ items: filteredItems.slice(0, 20) });
+            return res.json({ items: filteredItems });
         } else {
             // Custom Public API Logic
             const params = {
                 [config.keywordParam || 'keyword']: query,
                 serviceKey: config.serviceKey,
-                _type: 'json', // Common for many data.go.kr APIs
-                numOfRows: 20,
+                _type: 'json',
+                numOfRows: displayCount,
                 ...config.extraParams
             };
 
@@ -183,6 +190,17 @@ app.post('/api/collect', (req, res) => {
         writeJson(COLLECTED_FILE, collected);
     }
     res.json({ success: true });
+});
+
+app.delete('/api/collect', (req, res) => {
+    const { link } = req.body;
+    let collected = readJson(COLLECTED_FILE);
+    const originalLength = collected.length;
+    collected = collected.filter(a => a.link !== link);
+    if (collected.length !== originalLength) {
+        writeJson(COLLECTED_FILE, collected);
+    }
+    res.json({ success: true, count: collected.length });
 });
 
 // AI Draft Generation endpoint (Using direct API call for Node compatibility)
@@ -371,6 +389,167 @@ app.post('/api/tistory-post', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running at http://localhost:${PORT}`);
+// Naver Datalab Trend Endpoint
+app.post('/api/trend', async (req, res) => {
+    const { keyword } = req.body;
+    const clientId = process.env.NAVER_CLIENT_ID;
+    const clientSecret = process.env.NAVER_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+        return res.status(500).json({ error: 'Naver API key is not configured' });
+    }
+
+    // Calculate dates (Last 30 days)
+    const today = new Date();
+    const endDate = today.toISOString().split('T')[0];
+    const pastDate = new Date(today);
+    pastDate.setDate(today.getDate() - 30);
+    const startDate = pastDate.toISOString().split('T')[0];
+
+    try {
+        const response = await axios.post('https://openapi.naver.com/v1/datalab/search', {
+            startDate: startDate,
+            endDate: endDate,
+            timeUnit: 'date',
+            keywordGroups: [
+                {
+                    groupName: keyword,
+                    keywords: [keyword]
+                }
+            ]
+        }, {
+            headers: {
+                'X-Naver-Client-Id': clientId,
+                'X-Naver-Client-Secret': clientSecret,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('Trend API Error:', error.message);
+        res.status(500).json({ error: '트렌드 데이터를 가져오지 못했습니다.' });
+    }
+});
+
+// Multi-keyword Trend Endpoint
+app.post('/api/trend/multi', async (req, res) => {
+    const { keywords, timeUnit, device, gender, ages, startDate, endDate } = req.body;
+    const clientId = process.env.NAVER_CLIENT_ID;
+    const clientSecret = process.env.NAVER_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+        return res.status(500).json({ error: 'Naver API key is not configured' });
+    }
+
+    if (!keywords || keywords.length === 0) {
+        return res.status(400).json({ error: 'No keywords provided' });
+    }
+
+    // Default dates (Last 30 days) if not provided
+    const today = new Date();
+    const defaultEndDate = today.toISOString().split('T')[0];
+    const pastDate = new Date(today);
+    pastDate.setMonth(today.getMonth() - 1);
+    const defaultStartDate = pastDate.toISOString().split('T')[0];
+
+    const finalStartDate = startDate || defaultStartDate;
+    const finalEndDate = endDate || defaultEndDate;
+
+    const payload = {
+        startDate: finalStartDate,
+        endDate: finalEndDate,
+        timeUnit: timeUnit || 'date',
+        keywordGroups: keywords.slice(0, 5).map(keyword => ({
+            groupName: keyword,
+            keywords: [keyword]
+        }))
+    };
+
+    if (device) payload.device = device;
+    if (gender) payload.gender = gender;
+    if (ages && ages.length > 0) payload.ages = ages;
+
+    try {
+        const response = await axios.post('https://openapi.naver.com/v1/datalab/search', payload, {
+            headers: {
+                'X-Naver-Client-Id': clientId,
+                'X-Naver-Client-Secret': clientSecret,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('Multi Trend API Error:', error.response?.data || error.message);
+        res.status(500).json({ error: '트렌드 데이터를 가져오지 못했습니다.', details: error.response?.data });
+    }
+});
+
+// Naver Datalab Shopping Insight Endpoint
+app.post('/api/trend/shopping', async (req, res) => {
+    const { category, timeUnit, device, gender, ages, startDate, endDate } = req.body;
+    const clientId = process.env.NAVER_CLIENT_ID;
+    const clientSecret = process.env.NAVER_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+        return res.status(500).json({ error: 'Naver API key is not configured' });
+    }
+
+    if (!category) {
+        return res.status(400).json({ error: 'No category provided' });
+    }
+
+    // Default dates if not provided
+    const today = new Date();
+    const defaultEndDate = today.toISOString().split('T')[0];
+    const pastDate = new Date(today);
+    pastDate.setMonth(today.getMonth() - 1);
+    const defaultStartDate = pastDate.toISOString().split('T')[0];
+
+    const finalStartDate = startDate || defaultStartDate;
+    const finalEndDate = endDate || defaultEndDate;
+
+    const payload = {
+        startDate: finalStartDate,
+        endDate: finalEndDate,
+        timeUnit: timeUnit || 'date',
+        category: category // Naver expects a string code, or an array? Actually its 'category': '50000000'
+    };
+
+    if (device) payload.device = device;
+    if (gender) payload.gender = gender;
+    if (ages && ages.length > 0) payload.ages = ages;
+
+    try {
+        const response = await axios.post('https://openapi.naver.com/v1/datalab/shopping/categories', payload, {
+            headers: {
+                'X-Naver-Client-Id': clientId,
+                'X-Naver-Client-Secret': clientSecret,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('Shopping Trend API Error:', error.response?.data || error.message);
+        res.status(500).json({
+            error: '쇼핑 트렌드 데이터를 가져오지 못했습니다.',
+            details: error.response?.data
+        });
+    }
+});
+
+// Static files
+app.use(express.static(path.join(__dirname)));
+
+// 404 Handler for API
+app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'API endpoint not found' });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
 });
