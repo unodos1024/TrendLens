@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrendLens | AI 블로그 뉴스 수집기</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Noto+Sans+KR:wght@300;400;500;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <div class="logo-icon"></div>
+                <h1>TrendLens</h1>
+            </div>
+
+            <nav class="side-nav">
+                <div class="nav-group">
+                    <label>수집 키워드</label>
+                    <div class="input-group">
+                        <label for="source">데이터 출처</label>
+                        <div class="source-select-group">
+                            <select id="source">
+                                <option value="naver">네이버 뉴스 (기본)</option>
+                            </select>
+                            <button id="manageApisBtn" class="btn-icon-alt" title="API 등록/관리">⚙️</button>
+                        </div>
+                    </div>
+
+                    <div class="input-group">
+                        <label for="keyword">검색 키워드</label>
+                        <input type="text" id="keyword" placeholder="정부 정책, 뉴스 등 입력...">
+                    </div>
+                    <button id="searchBtn">수집 시작</button>
+                </div>
+
+                <div class="nav-group">
+                    <label>필터</label>
+                    <select id="sort">
+                        <option value="sim">정확도순</option>
+                        <option value="date">최신순</option>
+                    </select>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <p>© 2026 TrendLens AI</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-header">
+                <div class="status-badge">
+                    <span class="dot"></span>
+                    <span id="statusText">준비 완료</span>
+                </div>
+                <div class="header-actions">
+                    <button class="btn-icon" id="collectViewBtn" title="수집함 보기">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"></path>
+                        </svg>
+                    </button>
+                </div>
+            </header>
+
+            <section class="results-area" id="resultsArea">
+                <div class="empty-state">
+                    <div class="empty-icon">📰</div>
+                    <h2>수집된 뉴스가 없습니다</h2>
+                    <p>키워드를 입력하고 수집을 시작해 보세요.</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Toast UI -->
+    <div id="toast" class="toast"></div>
+
+    <!-- AI Draft Modal -->
+    <div id="draftModal" class="modal">
+        <div class="modal-content">
+            <header class="modal-header">
+                <h2>✍️ AI 블로그 초안 생성</h2>
+                <button class="close-btn" id="closeModal">&times;</button>
+            </header>
+            <div class="modal-body">
+                <div id="draftLoading" class="loading-overlay" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>AI가 글을 작성하고 있습니다...</p>
+                </div>
+                <div class="draft-container">
+                    <div class="draft-header">
+                        <label>제목</label>
+                        <input type="text" id="draftTitle" readonly>
+                    </div>
+                    <div class="draft-body">
+                        <label>본문 내용</label>
+                        <textarea id="draftText" readonly></textarea>
+                    </div>
+                    <div class="draft-tags">
+                        <label>추천 태그</label>
+                        <div id="draftTagList" class="tag-list"></div>
+                    </div>
+                </div>
+            </div>
+            <footer class="modal-footer">
+                <button id="copyDraftBtn" class="btn-secondary">클립보드 복사</button>
+                <button id="postTistoryBtn" class="btn-primary">Tistory에 게시</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- API Management Modal -->
+    <div id="apiModal" class="modal">
+        <div class="modal-content">
+            <header class="modal-header">
+                <h2>🌐 공공데이터 API 등록/관리</h2>
+                <button class="close-api-btn" id="closeApiModal">&times;</button>
+            </header>
+            <div class="modal-body">
+                <div class="api-list-section">
+                    <h3>등록된 API 목록</h3>
+                    <div id="apiConfigList" class="api-config-list">
+                        <!-- API configs will be loaded here -->
+                    </div>
+                </div>
+                <hr class="divider">
+                <div class="api-form-section">
+                    <h3>새 API 등록</h3>
+                    <form id="apiConfigForm" class="api-form">
+                        <input type="hidden" id="configId">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>API 명칭</label>
+                                <input type="text" id="configName" placeholder="예: 문체부 정책브리핑" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Endpoint URL (JSON 응답 주소)</label>
+                                <input type="url" id="configUrl" placeholder="http://apis.data.go.kr/..." required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>인증키 (Service Key)</label>
+                                <input type="text" id="configKey" placeholder="공공데이터포털에서 발급받은 키" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>키워드 파라미터명</label>
+                                <input type="text" id="configKeyword" placeholder="예: keyword, query" required>
+                            </div>
+                            <div class="form-group">
+                                <label>데이터 경로 (Item Path)</label>
+                                <input type="text" id="configPath" placeholder="예: body.items (생략가능)">
+                            </div>
+                        </div>
+                        <div class="form-row mapping-group">
+                            <label>필드 매핑 (API상의 필드명을 입력)</label>
+                            <div class="mapping-inputs">
+                                <input type="text" id="mapTitle" placeholder="제목 필드(title)">
+                                <input type="text" id="mapLink" placeholder="링크 필드(link)">
+                                <input type="text" id="mapDesc" placeholder="설명 필드(description)">
+                            </div>
+                        </div>
+                        <button type="submit" id="saveApiBtn" class="btn-primary">API 저장하기</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+
+</html>

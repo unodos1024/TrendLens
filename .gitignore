@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.log
+excluded_news.json
+collected_news.json
+api_configs.json
+.DS_Store
